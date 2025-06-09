@@ -98,29 +98,35 @@ rd_kafka_subscribe(rd_kafka_t *rk,
             rd_kafka_op_req(rkcg->rkcg_ops, rko, RD_POLL_INFINITE));
 }
 
-
+/**
+ * 调用者是 rd_kafka_assign
+ * @param rk  创建的kafka client
+ * @param assign_method
+ * @param partitions 需要全量进行assign的partition
+ * @return
+ */
 rd_kafka_error_t *
 rd_kafka_assign0(rd_kafka_t *rk,
-                 rd_kafka_assign_method_t assign_method,
+                 rd_kafka_assign_method_t assign_method, // 这里是 RD_KAFKA_ASSIGN_METHOD_ASSIGN，即进行eager的assignment(全量的assignment)
                  const rd_kafka_topic_partition_list_t *partitions) {
         rd_kafka_op_t *rko;
-        rd_kafka_cgrp_t *rkcg;
-
-        if (!(rkcg = rd_kafka_cgrp_get(rk)))
+        rd_kafka_cgrp_t *rkcg; // 这个Kafka Client的Consumer Group
+        // 对应的group其实是保存在对应的consumer中的
+        if (!(rkcg = rd_kafka_cgrp_get(rk))) // 必须有Consumer Group
                 return rd_kafka_error_new(RD_KAFKA_RESP_ERR__UNKNOWN_GROUP,
                                           "Requires a consumer with group.id "
                                           "configured");
 
-        rko = rd_kafka_op_new(RD_KAFKA_OP_ASSIGN);
+        rko = rd_kafka_op_new(RD_KAFKA_OP_ASSIGN); // 创建 rd_kafka_op_t 对象，这个对象的 rko_type 是 RD_KAFKA_OP_ASSIGN
+        // 一个类型为RD_KAFKA_OP_ASSIGN的 rd_kafka_op_t，它的union结构中的
+        rko->rko_u.assign.method = assign_method; // 设置为  RD_KAFKA_ASSIGN_METHOD_ASSIGN
 
-        rko->rko_u.assign.method = assign_method;
-
-        if (partitions)
+        if (partitions) // 如果有partitions，那么设置partitions
                 rko->rko_u.assign.partitions =
                     rd_kafka_topic_partition_list_copy(partitions);
 
         return rd_kafka_op_error_destroy(
-            rd_kafka_op_req(rkcg->rkcg_ops, rko, RD_POLL_INFINITE));
+            rd_kafka_op_req(rkcg->rkcg_ops, rko, RD_POLL_INFINITE)); // 发送Kafka的PartitionTopic的Assign请求
 }
 
 
@@ -129,7 +135,9 @@ rd_kafka_assign(rd_kafka_t *rk,
                 const rd_kafka_topic_partition_list_t *partitions) {
         rd_kafka_error_t *error;
         rd_kafka_resp_err_t err;
-
+        // 可以看到，这里使用的是RD_KAFKA_ASSIGN_METHOD_ASSIGN，即全量的ASSIGN(既然是全量的，那么这个assign肯定也就包含了unassgin的过程)
+        // 但是如果是增量，那么必须清楚地区分开是assign还是unassign
+        // 搜索 Enumerates the assign op sub-types
         error = rd_kafka_assign0(rk, RD_KAFKA_ASSIGN_METHOD_ASSIGN, partitions);
 
         if (!error)

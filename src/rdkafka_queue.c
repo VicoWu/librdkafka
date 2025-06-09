@@ -383,6 +383,7 @@ rd_kafka_op_filter(rd_kafka_q_t *rkq, rd_kafka_op_t *rko, int version) {
  * @returns the first event:able op, or NULL on timeout.
  *
  * Locality: any thread
+ * rd_kafka_q_pop(rd_kafka_q_t *rkq, rd_ts_t timeout_us, int32_t version) 中调用了该方法
  */
 rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
                                     rd_ts_t timeout_us,
@@ -492,8 +493,12 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
         return rko;
 }
 
+/**
+ * 在rd_kafka_resp_err_t rd_kafka_consumer_close中被调用
+ */
 rd_kafka_op_t *
 rd_kafka_q_pop(rd_kafka_q_t *rkq, rd_ts_t timeout_us, int32_t version) {
+        // rkq是用来接收消息的队列
         return rd_kafka_q_pop_serve(rkq, timeout_us, version,
                                     RD_KAFKA_Q_CB_RETURN, NULL, NULL);
 }

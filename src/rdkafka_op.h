@@ -36,9 +36,12 @@
 
 
 /* Forward declarations */
-typedef struct rd_kafka_q_s rd_kafka_q_t;
+/**
+ * rd_kafka_q_s 是 Kafka 的内部消息队列，用来存放来自网络线程、后台线程、应用线程之间传递的异步事件（封装为 rd_kafka_op_s）。
+ */
+typedef struct rd_kafka_q_s rd_kafka_q_t; // Kafka 的内部队列结构，保存多个 rd_kafka_op_s 实例
 typedef struct rd_kafka_toppar_s rd_kafka_toppar_t;
-typedef struct rd_kafka_op_s rd_kafka_op_t;
+typedef struct rd_kafka_op_s rd_kafka_op_t; // 表示 Kafka 的一次“事件”或“操作”或“消息”
 typedef struct rd_kafka_broker_s rd_kafka_broker_t;
 
 /* One-off reply queue + reply version.
@@ -193,8 +196,12 @@ typedef enum {
 } rd_kafka_op_type_t;
 
 /* Flags used with op_type_t */
+// 这是一个Callback的 OP， 1 << 29，即 0x20000000。
 #define RD_KAFKA_OP_CB       (int)(1 << 29) /* Callback op. */
+// 这是一个Reply操作的op，1 << 30，即 0x40000000。
 #define RD_KAFKA_OP_REPLY    (int)(1 << 30) /* Reply op. */
+// 含义： 一个 mask，用于从某个 op_type_t 变量中 提取“是否是 callback/reply”这些特殊标志位。
+// 二进制值： 0x20000000 | 0x40000000 = 0x60000000
 #define RD_KAFKA_OP_FLAGMASK (RD_KAFKA_OP_CB | RD_KAFKA_OP_REPLY)
 
 

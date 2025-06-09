@@ -688,20 +688,21 @@ int rd_kafka_op_error_reply(rd_kafka_op_t *rko, rd_kafka_error_t *error) {
  *
  * @returns response on success or NULL if destq is disabled.
  */
-rd_kafka_op_t *rd_kafka_op_req0(rd_kafka_q_t *destq,
-                                rd_kafka_q_t *recvq,
-                                rd_kafka_op_t *rko,
+rd_kafka_op_t *rd_kafka_op_req0(rd_kafka_q_t *destq, // 目标队列，存放请求， 这里是 这个consumer group的queue
+                                rd_kafka_q_t *recvq, // 接收队列，存放响应
+                                rd_kafka_op_t *rko,  // 如果是struct，那么就是RD_KAFKA_OP_SUBSCRIBE类型对应的struct
                                 int timeout_ms) {
         rd_kafka_op_t *reply;
 
         /* Indicate to destination where to send reply. */
-        rd_kafka_op_set_replyq(rko, recvq, NULL);
+        rd_kafka_op_set_replyq(rko, recvq, NULL); // 设置接收队列，这样Kafka把回复的消息放到该队列中
 
         /* Enqueue op */
-        if (!rd_kafka_q_enq(destq, rko))
+        if (!rd_kafka_q_enq(destq, rko)) // 发送消息， 把rko发送到destq中
                 return NULL;
-
+        // 消息发送成功，从返回队列中获取消息
         /* Wait for reply */
+        // 这里是堆栈的一部分，Block在了等待reply的阶段
         reply = rd_kafka_q_pop(recvq, rd_timeout_us(timeout_ms), 0);
 
         /* May be NULL for timeout */
@@ -711,14 +712,24 @@ rd_kafka_op_t *rd_kafka_op_req0(rd_kafka_q_t *destq,
 /**
  * Send request to queue, wait for response.
  * Creates a temporary reply queue.
+   发送一个请求到指定的队列 destq，然后同步等待其返回结果。
+   调用者是 rd_kafka_assign0，这里的Timeout是-1，也就是永久
+   在 rd_kafka_assign0 中调用，destq是对应的Consumer Group的
  */
 rd_kafka_op_t *
-rd_kafka_op_req(rd_kafka_q_t *destq, rd_kafka_op_t *rko, int timeout_ms) {
-        rd_kafka_q_t *recvq;
-        rd_kafka_op_t *reply;
+rd_kafka_op_req(rd_kafka_q_t *destq, // 一般是某个模块的操作处理队列，比如主线程队列，这里是ConsumerGroup的队列
+                rd_kafka_op_t *rko,  // 要发送的请求操作（一个 rd_kafka_op_t 实例，表示要执行的操作）。
+                int timeout_ms) {
+        rd_kafka_q_t *recvq; // 存放回复消息的队列，我们为这个请求专门建一个 queue 来等回包。
+        rd_kafka_op_t *reply; // 存放回复
 
         recvq = rd_kafka_q_new(destq->rkq_rk);
-
+        /**
+         * 将请求 rko 发送到目标队列 destq(这里是consumer group的manager queue)。
+         * 将 recvq 设为这个请求的 reply-to queue，即响应要回送到这个队列。
+         * 阻塞等待 recvq 中出现响应（带 timeout）
+         * 返回对应的响应信息 rd_kafka_op_t *
+         */
         reply = rd_kafka_op_req0(destq, recvq, rko, timeout_ms);
 
         rd_kafka_q_destroy_owner(recvq);

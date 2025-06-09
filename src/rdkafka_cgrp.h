@@ -51,13 +51,14 @@ extern const char *rd_kafka_cgrp_join_state_names[];
 
 /**
  * Client group
+ * rd_kafka_cgrp_s 是 librdkafka 中表示一个 Consumer Group 客户端的核心结构，也就是 Consumer Group 客户端状态管理器
  */
 typedef struct rd_kafka_cgrp_s {
-        const rd_kafkap_str_t *rkcg_group_id;
-        rd_kafkap_str_t *rkcg_member_id; /* Last assigned MemberId */
-        rd_kafkap_str_t *rkcg_group_instance_id;
-        const rd_kafkap_str_t *rkcg_client_id;
-        rd_kafkap_str_t *rkcg_client_rack;
+        const rd_kafkap_str_t *rkcg_group_id;        // Group ID
+        rd_kafkap_str_t       *rkcg_member_id;       // 成员 ID（Kafka 分配）
+        rd_kafkap_str_t       *rkcg_group_instance_id; // 实例 ID（静态成员使用）
+        const rd_kafkap_str_t *rkcg_client_id;       // 客户端 ID
+        rd_kafkap_str_t       *rkcg_client_rack;     // 所在机架，用于 rack-aware 分配
 
         enum {
                 /* Init state */
@@ -85,6 +86,21 @@ typedef struct rd_kafka_cgrp_s {
                                       * state change. */
 
 
+        /**
+         * 大致流程如下：
+
+        1. INIT
+
+        2. 发 JoinGroupRequest → WAIT_JOIN
+
+        3. 拿到 Metadata → WAIT_METADATA
+
+        4. 发 SyncGroupRequest → WAIT_SYNC
+
+        5. 等用户调用 assign() 或 unassign() → WAIT_ASSIGN_CALL or WAIT_UNASSIGN_CALL
+
+        6. 全部完成 → STEADY
+         */
         enum {
                 /* all: join or rejoin, possibly with an existing assignment. */
                 RD_KAFKA_CGRP_JOIN_STATE_INIT,
@@ -121,9 +137,15 @@ typedef struct rd_kafka_cgrp_s {
         struct {
                 rd_kafka_group_member_t *members;
                 int member_cnt;
-        } rkcg_group_leader;
+        } rkcg_group_leader; // 如果当前consumer是leader，那么这里包含了这个group中其他所有城元旦 信息
 
+        /**
+         * 消费者的 poll() 就是从 rkcg_q 中拿消息
+         */
         rd_kafka_q_t *rkcg_q;            /* Application poll queue */
+        /**
+         * 管理器（如 rebalance 协调器）使用 rkcg_ops 队列调度内部命令
+         */
         rd_kafka_q_t *rkcg_ops;          /* Manager ops queue */
         rd_kafka_q_t *rkcg_wait_coord_q; /* Ops awaiting coord */
         int rkcg_flags;

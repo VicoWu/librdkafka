@@ -40,7 +40,9 @@
 /** @brief Queueing strategy */
 #define RD_KAFKA_QUEUE_FIFO 0
 #define RD_KAFKA_QUEUE_LIFO 1
-
+/**
+ * 是 BSD 系统的队列宏，它的作用是 定义一个名为 rd_kafka_op_tailq 的双向链表头结构体，这个链表用来存放 rd_kafka_op_s 类型的节点。
+ */
 TAILQ_HEAD(rd_kafka_op_tailq, rd_kafka_op_s);
 
 /**
@@ -49,6 +51,28 @@ TAILQ_HEAD(rd_kafka_op_tailq, rd_kafka_op_s);
  * @remark All readers of the queue must call rd_kafka_q_mark_served()
  *         after reading the queue (while still holding the queue lock) to
  *         clear the wakeup-sent flag.
+ *
++------------------+
+| rd_kafka_q_s     | <- Kafka 内部异步队列
+|------------------|
+| rkq_q ->         | ---+
+|  [op1]           |    |   每一个 op1, op2 是
+|  [op2]           |    |--- rd_kafka_op_s
+|  [op3]           |    |
++------------------+    |
+                        |
+           +------------------------+
+           | rd_kafka_op_s (op1)    |
+           | type = FETCH           |
+           +------------------------+
+           | rd_kafka_op_s (op2)    |
+           | type = REBALANCE       |
+           +------------------------+
+           | rd_kafka_op_s (op3)    |
+           | type = DELIVERY_REPORT |
+           +------------------------+
+
+ *
  */
 struct rd_kafka_q_s {
         mtx_t rkq_lock;
@@ -56,7 +80,7 @@ struct rd_kafka_q_s {
         struct rd_kafka_q_s *rkq_fwdq; /* Forwarded/Routed queue.
                                         * Used in place of this queue
                                         * for all operations. */
-
+        // 队列内部的 TAILQ，保存多个 rd_kafka_op_s
         struct rd_kafka_op_tailq rkq_q; /* TAILQ_HEAD(, rd_kafka_op_s) */
         int rkq_qlen;                   /* Number of entries in queue */
         int64_t rkq_qsize;              /* Size of all entries in queue */

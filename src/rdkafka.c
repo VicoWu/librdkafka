@@ -3450,10 +3450,10 @@ rd_kafka_resp_err_t rd_kafka_consumer_close(rd_kafka_t *rk) {
                 while ((rko = rd_kafka_q_pop(rkq, RD_POLL_INFINITE, 0))) {
                         rd_kafka_op_res_t res;
                         if ((rko->rko_type & ~RD_KAFKA_OP_FLAGMASK) ==
-                            RD_KAFKA_OP_TERMINATE) {
+                            RD_KAFKA_OP_TERMINATE) { // 如果收到了terminiate
                                 err = rko->rko_err;
                                 rd_kafka_op_destroy(rko);
-                                break;
+                                break; // 跳出循环
                         }
                         /* Handle callbacks */
                         res = rd_kafka_poll_cb(rk, rkq, rko,
@@ -3905,10 +3905,11 @@ rd_kafka_offsets_for_times(rd_kafka_t *rk,
  *          other res types (such as OP_RES_PASS).
  *
  * @locality any thread that serves op queues
+ * 在 rd_kafka_resp_err_t rd_kafka_consumer_close(rd_kafka_t *rk) { 中调用了该方法
  */
-rd_kafka_op_res_t rd_kafka_poll_cb(rd_kafka_t *rk,
-                                   rd_kafka_q_t *rkq,
-                                   rd_kafka_op_t *rko,
+rd_kafka_op_res_t rd_kafka_poll_cb(rd_kafka_t *rk, // 对应的kafka客户端
+                                   rd_kafka_q_t *rkq, // 用来接收消息的消息队列
+                                   rd_kafka_op_t *rko,  // 收到的消息所对应的op 结构体
                                    rd_kafka_q_cb_type_t cb_type,
                                    void *opaque) {
         rd_kafka_msg_t *rkm;
@@ -3921,7 +3922,7 @@ rd_kafka_op_res_t rd_kafka_poll_cb(rd_kafka_t *rk,
         }
 
         switch ((int)rko->rko_type) {
-        case RD_KAFKA_OP_FETCH:
+        case RD_KAFKA_OP_FETCH: // 获取到了新的Kafka 消息
                 if (!rk->rk_conf.consume_cb ||
                     cb_type == RD_KAFKA_Q_CB_RETURN ||
                     cb_type == RD_KAFKA_Q_CB_FORCE_RETURN)
@@ -3936,11 +3937,15 @@ rd_kafka_op_res_t rd_kafka_poll_cb(rd_kafka_t *rk,
                 }
                 break;
 
-        case RD_KAFKA_OP_REBALANCE:
-                if (rk->rk_conf.rebalance_cb)
+        case RD_KAFKA_OP_REBALANCE: // // 预期收到Terminate消息，但是却收到了Rebalance消息
+                if (rk->rk_conf.rebalance_cb)  // 如果有callback，那么就调用callback，这里调用的是 cppkafka::Consumer::rebalance_proxy,
                         rk->rk_conf.rebalance_cb(
+                            // Kafka 原生协议里面，Rebalance 既有可能是“让你分配新的 partition”（assign），也有可能是“取消已有的 partition”（revoke）
+                            // 为了复用统一的 callback 接口、避免重新设计 event 类型，librdkafka 选择了：用一个 op（RD_KAFKA_OP_REBALANCE）表示 "发生 Rebalance", 用 rko_err 告诉你是哪种情况
+                            // 为什么发生RD_KAFKA_OP_REBALANCE的时候，这里会被认为是一种error？这里的error其实是事件分类，而不是传统意义上的失败
                             rk, rko->rko_err, rko->rko_u.rebalance.partitions,
                             rk->rk_conf.opaque);
+
                 else {
                         /** If EVENT_REBALANCE is enabled but rebalance_cb
                          *  isn't, we need to perform a dummy assign for the
@@ -3951,7 +3956,7 @@ rd_kafka_op_res_t rd_kafka_poll_cb(rd_kafka_t *rk,
                                      rko->rko_u.rebalance.partitions
                                          ? rko->rko_u.rebalance.partitions->cnt
                                          : 0);
-                        rd_kafka_assign(rk, NULL);
+                        rd_kafka_assign(rk, NULL); // 进行一个空的assign
                 }
                 break;
 
