@@ -3359,19 +3359,28 @@ rd_kafka_message_t *rd_kafka_consumer_poll(rd_kafka_t *rk, int timeout_ms) {
 
 
 /**
+ * 方法是 Kafka C 客户端中用于 异步关闭消费者（Consumer） 的核心函数之一，封装了从 请求关闭到开始关闭流程的发起步骤。这个方法会在 rd_kafka_consumer_close() 中被调用。
  * @brief Consumer close.
- *
+ * 在方法  rd_kafka_resp_err_t rd_kafka_consumer_close中被调用
  * @param rkq The consumer group queue will be forwarded to this queue, which
  *            which must be served (rebalance events) by the application/caller
  *            until rd_kafka_consumer_closed() returns true.
  *            If the consumer is not in a joined state, no rebalance events
  *            will be emitted.
+它做的事情是：
+
+1. 获取这个消费者的 group（如果没有，说明不合法）。
+2. 检查该 group 是否已经终止过了。
+3. 检查是否出现了致命错误（fatal error）。
+4. 把 group 的内部队列转发到用户传入的 rkq 队列。
+5. 异步发起关闭指令，告诉 group 管理逻辑终止。
+6. 返回可能的错误（如果有 fatal error 会返回，否则返回 NULL 说明“已成功开始关闭流程”）。
  */
-static rd_kafka_error_t *rd_kafka_consumer_close_q(rd_kafka_t *rk,
-                                                   rd_kafka_q_t *rkq) {
+static rd_kafka_error_t *rd_kafka_consumer_close_q(rd_kafka_t *rk, // 当前的 Kafka 客户端（rd_kafka_t*），必须是一个消费者
+                                                   rd_kafka_q_t *rkq) { // 一个应用层传入的 rd_kafka_q_t 队列，用来接收关闭过程中产生的异步事件（比如 rebalance 通知、TERMINATE 完成通知等）。
         rd_kafka_cgrp_t *rkcg;
         rd_kafka_error_t *error = NULL;
-
+        // 如果没有consumer group，是不对的。一个Consumer在join了一个group以后，会将对应的group信息保存在自己的Consumer对象中
         if (!(rkcg = rd_kafka_cgrp_get(rk)))
                 return rd_kafka_error_new(RD_KAFKA_RESP_ERR__UNKNOWN_GROUP,
                                           "Consume close called on non-group "
@@ -3395,10 +3404,19 @@ static rd_kafka_error_t *rd_kafka_consumer_close_q(rd_kafka_t *rk,
         /* Redirect cgrp queue to the rebalance queue to make sure all posted
          * ops (e.g., rebalance callbacks) are served by
          * the application/caller. */
-        rd_kafka_q_fwd_set(rkcg->rkcg_q, rkq);
+        /*
+         * group 内部的事件（如 rebalance、close 完成通知）默认是推送到它自己的 rkcg_q。
+         * 这里重定向到应用层传入的 rkq，使得应用在调用 rd_kafka_consumer_poll() 还能拿到这些事件。
+        */
+        rd_kafka_q_fwd_set(rkcg->rkcg_q, rkq); // 设置 group 的 poll 队列为传入队列（关键！）
 
         /* Tell cgrp subsystem to terminate. A TERMINATE op will be posted
          * on the rkq when done. */
+        /**
+         * 发出 TERMINATE 命令（异步关闭）
+         * 给 group 发出 TERMINATE 命令。
+         * RD_KAFKA_REPLYQ(rkq, 0) 是一个包含 rkq 的封装结构，会告诉 group：“关闭完成后，把事件推给这个队列”。
+         */
         rd_kafka_cgrp_terminate(rkcg, RD_KAFKA_REPLYQ(rkq, 0)); /* async */
 
         return error;
@@ -3421,6 +3439,9 @@ rd_kafka_resp_err_t rd_kafka_consumer_close(rd_kafka_t *rk) {
         rkq = rd_kafka_q_new(rk);
 
         /* Initiate the close (async) */
+        /**
+         * 这个函数会向后台发送关闭请求，并传入 rkq 作为“回应队列”，也就是说一旦关闭完成，对应的 TERMINATE 信号会写到这个队列里。
+         */
         error = rd_kafka_consumer_close_q(rk, rkq);
         if (error) {
                 err = rd_kafka_error_is_fatal(error)
@@ -3447,14 +3468,19 @@ rd_kafka_resp_err_t rd_kafka_consumer_close(rd_kafka_t *rk) {
         } else {
                 rd_kafka_op_t *rko;
                 rd_kafka_dbg(rk, CONSUMER, "CLOSE", "Waiting for close events");
+                /**
+                 * 在通过方法 rd_kafka_consumer_close_q(rk, rkq); 将rkq设置为consumer group的转发队列以后，
+                 * consumer group收到的消息就会进入到这个新建的rkq中，因此，在这里，不断等待来自rkq中的消息
+                 */
                 while ((rko = rd_kafka_q_pop(rkq, RD_POLL_INFINITE, 0))) {
                         rd_kafka_op_res_t res;
                         if ((rko->rko_type & ~RD_KAFKA_OP_FLAGMASK) ==
-                            RD_KAFKA_OP_TERMINATE) { // 如果收到了terminiate
+                            RD_KAFKA_OP_TERMINATE) { // 等到了terminiate，退出
                                 err = rko->rko_err;
                                 rd_kafka_op_destroy(rko);
                                 break; // 跳出循环
                         }
+                        // 只要不是terminate消息，就在rd_kafka_poll_cb中进行处理
                         /* Handle callbacks */
                         res = rd_kafka_poll_cb(rk, rkq, rko,
                                                RD_KAFKA_Q_CB_RETURN, NULL);

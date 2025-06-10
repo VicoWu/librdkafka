@@ -242,6 +242,7 @@ typedef enum {
 
 /**
  * @brief Queue serve callback call type
+ * 这个枚举决定了：读到的消息（或操作）是直接触发回调函数，还是作为事件返回给调用者，还是完全忽略回调。
  */
 typedef enum {
         RD_KAFKA_Q_CB_INVALID,      /* dont use */

@@ -46,10 +46,10 @@ void rd_kafka_yield(rd_kafka_t *rk) {
  */
 static RD_INLINE rd_bool_t rd_kafka_q_check_yield(rd_kafka_q_t *rkq) {
         if (!(rkq->rkq_flags & RD_KAFKA_Q_F_YIELD))
-                return rd_false;
-
+                return rd_false; // no yield flag
+        // yield位的确置位了，因此清楚yield标志
         rkq->rkq_flags &= ~RD_KAFKA_Q_F_YIELD;
-        return rd_true;
+        return rd_true; // 返回 true，告诉调用方要 yield
 }
 /**
  * Destroy a queue. refcnt must be at zero.
@@ -384,22 +384,24 @@ rd_kafka_op_filter(rd_kafka_q_t *rkq, rd_kafka_op_t *rko, int version) {
  *
  * Locality: any thread
  * rd_kafka_q_pop(rd_kafka_q_t *rkq, rd_ts_t timeout_us, int32_t version) 中调用了该方法
+ * 这里的意图是，在调用该方法以前，已经将rd_kafka_q_t *rkq设置为某一个转发队列，然后通过该方法等待这个队列中出现新的消息
  */
-rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
+rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq, // 用来存放response的队列
                                     rd_ts_t timeout_us,
                                     int32_t version,
                                     rd_kafka_q_cb_type_t cb_type,
                                     rd_kafka_q_serve_cb_t *callback,
                                     void *opaque) {
-        rd_kafka_op_t *rko;
-        rd_kafka_q_t *fwdq;
+        rd_kafka_op_t *rko; // op
+        rd_kafka_q_t *fwdq; // 队列
 
         rd_dassert(cb_type);
 
-        mtx_lock(&rkq->rkq_lock);
+        mtx_lock(&rkq->rkq_lock); // 锁定队列
 
         rd_kafka_yield_thread = 0;
         if (!(fwdq = rd_kafka_q_fwd_get(rkq, 0))) {
+                // 这个检查尝试获取队列的转发队列（如果有的话）。如果返回 NULL，表示没有转发队列，接着执行后面的逻辑。
                 const rd_bool_t can_q_contain_fetched_msgs =
                     rd_kafka_q_can_contain_fetched_msgs(rkq, RD_DONT_LOCK);
 
@@ -410,7 +412,7 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
                 if (can_q_contain_fetched_msgs)
                         rd_kafka_app_poll_start(rkq->rkq_rk, 0, timeout_us);
 
-                while (1) {
+                while (1) { // 无限循环，除非从内部退出
                         rd_kafka_op_res_t res;
                         /* Keep track of current lock status to avoid
                          * unnecessary lock flapping in all the cases below. */
@@ -418,12 +420,16 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
 
                         /* Filter out outdated ops */
                 retry:
+                        /**
+                         * 队列为空时，rko 会被设置为 NULL，并跳出循环。此时程序会等待新的操作到来，直到条件变量被触发。
+                         * 队列中有操作但都不符合条件时，rko 将为 NULL，也会跳出循环，等待新的操作。
+                         */
                         while ((rko = TAILQ_FIRST(&rkq->rkq_q)) &&
                                !(rko = rd_kafka_op_filter(rkq, rko, version)))
                                 ;
-
-                        rd_kafka_q_mark_served(rkq);
-
+                        // 退出上面的while循环，说明rkq->rkq_q中已经有了新的消息，并且经过filter以后判断符合要求
+                        rd_kafka_q_mark_served(rkq); // 标记这个queue为已经被处理
+                        // 执行到这里，rko可能不为空，代表一个合法有效的operation，也有可能为空
                         if (rko) {
                                 /* Proper versioned op */
                                 rd_kafka_q_deq0(rkq, rko);
@@ -459,8 +465,9 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
                                         break; /* Proper op, handle below. */
                                 }
                         }
-
-                        if (unlikely(rd_kafka_q_check_yield(rkq))) {
+                        // 执行到这里，说明队列为空
+                        // unlikely 是一个宏，用来提示编译器这条分支不常走，提高分支预测效率，没有逻辑含义
+                        if (unlikely(rd_kafka_q_check_yield(rkq))) { // 如果yield标志位的确置位了
                                 if (is_locked)
                                         mtx_unlock(&rkq->rkq_lock);
                                 if (can_q_contain_fetched_msgs)
@@ -470,10 +477,13 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
 
                         if (!is_locked)
                                 mtx_lock(&rkq->rkq_lock);
-
+                        //  使用条件变量 (rkq->rkq_cond) 来等待队列中是否有新操作可处理。
+                        //  如果队列为空或没有满足条件的操作，它会在这个条件变量上阻塞，直到有新的操作到来或超时。
+                        // 在我们的场景下， timeout是INFINITE，因此会一直等待
+                        // 很显然，队列有元素插入的时候，会在rkq上发送通知。 参考方法： static RD_INLINE RD_UNUSED int rd_kafka_q_enq1
                         if (cnd_timedwait_abs(&rkq->rkq_cond, &rkq->rkq_lock,
-                                              &timeout_tspec) != thrd_success) {
-                                mtx_unlock(&rkq->rkq_lock);
+                                              &timeout_tspec) != thrd_success) { // 条件变量在等待通知期间，是会释放互斥锁的
+                                mtx_unlock(&rkq->rkq_lock); //条件满足，释放锁
                                 if (can_q_contain_fetched_msgs)
                                         rd_kafka_app_polled(rkq->rkq_rk);
                                 return NULL;
@@ -481,6 +491,7 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq,
                 }
 
         } else {
+                // 如果rkq本身还有转发队列（记住，rd_kafka_resp_err_t rd_kafka_consumer_close方法中，这个rke本身就是consumer group队列的转发队列)，函数会将当前的队列操作转发到子队列进行处理。
                 /* Since the q_pop may block we need to release the parent
                  * queue's lock. */
                 mtx_unlock(&rkq->rkq_lock);
@@ -500,7 +511,8 @@ rd_kafka_op_t *
 rd_kafka_q_pop(rd_kafka_q_t *rkq, rd_ts_t timeout_us, int32_t version) {
         // rkq是用来接收消息的队列
         return rd_kafka_q_pop_serve(rkq, timeout_us, version,
-                                    RD_KAFKA_Q_CB_RETURN, NULL, NULL);
+                                    RD_KAFKA_Q_CB_RETURN,  // 这里的意思是，读到的消息用来直接触发callback
+                                    NULL, NULL);
 }
 
 

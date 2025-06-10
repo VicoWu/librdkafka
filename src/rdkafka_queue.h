@@ -440,17 +440,26 @@ rd_kafka_q_enq0(rd_kafka_q_t *rkq, rd_kafka_op_t *rko, int at_head) {
  *
  * @returns 1 if op was enqueued or 0 if queue is disabled and
  * there was no replyq to enqueue on in which case the rko is destroyed.
- *
+Kafka 的队列 (rd_kafka_q_t) 支持转发（forwarding）机制，例如：
+        ```
+         rd_kafka_q_fwd_set(group_q, app_q);
+        ```
+意思是：group queue 不再自己处理消息，而是把所有消息都转发到 app queue。
+这样带来两个问题：
+  - 消息最终入队的队列是 app_q，但逻辑上它原本属于 group_q。
+  - 某些信息（比如 serve 回调）应该保留 group_q 上绑定的处理逻辑，即即使在转发的时候，之前最初的处理逻辑应该随之保留并转移
  * @locality any thread.
  */
-static RD_INLINE RD_UNUSED int rd_kafka_q_enq1(rd_kafka_q_t *rkq,
-                                               rd_kafka_op_t *rko,
-                                               rd_kafka_q_t *orig_destq,
-                                               int at_head,
+static RD_INLINE RD_UNUSED int rd_kafka_q_enq1(rd_kafka_q_t *rkq, // 要入队的目标队列
+                                               rd_kafka_op_t *rko, // 要入队的操作对象（事件）
+                                               rd_kafka_q_t *orig_destq, // 最原始用户指定的队列（可能已经被转发），也就是调用者一开始想要把 rko（Kafka 操作事件）放入的队列。它在队列重定向（forwarding）机制下非常重要。
+
+
+                                               int at_head, // 是否放在队列头部（否则放尾部）
                                                int do_lock) {
         rd_kafka_q_t *fwdq;
 
-        if (do_lock)
+        if (do_lock) // 如果调用者要求加锁，这里就加锁保护队列并发访问。
                 mtx_lock(&rkq->rkq_lock);
 
         rd_dassert(rkq->rkq_refcnt > 0);
@@ -463,24 +472,28 @@ static RD_INLINE RD_UNUSED int rd_kafka_q_enq1(rd_kafka_q_t *rkq,
                 return rd_kafka_op_reply(rko, RD_KAFKA_RESP_ERR__DESTROY);
         }
 
-        if (!(fwdq = rd_kafka_q_fwd_get(rkq, 0))) {
+        if (!(fwdq = rd_kafka_q_fwd_get(rkq, 0))) { // 当前的队列没有转发队列
                 if (!rko->rko_serve && orig_destq->rkq_serve) {
                         /* Store original queue's serve callback and opaque
                          * prior to forwarding. */
                         rko->rko_serve        = orig_destq->rkq_serve;
                         rko->rko_serve_opaque = orig_destq->rkq_opaque;
                 }
-
+                // 入队列。 这里的enq0是最底层的入队列操作，仅仅进行入队列，什么其他的都不做
                 rd_kafka_q_enq0(rkq, rko, at_head);
-                cnd_signal(&rkq->rkq_cond);
+                cnd_signal(&rkq->rkq_cond); // 发送信号，这样，在这个队列上等消息的就会收到通知，被unblock并取出消息
                 if (rkq->rkq_qlen == 1)
                         rd_kafka_q_io_event(rkq);
 
                 if (do_lock)
                         mtx_unlock(&rkq->rkq_lock);
         } else {
+                /**
+                 * 但如果存在转发队列 fwdq，就不会把事件放入当前队列，而是把事件递归地放入转发队列 fwdq
+                 */
                 if (do_lock)
                         mtx_unlock(&rkq->rkq_lock);
+                // 转发到 转发队列
                 rd_kafka_q_enq1(fwdq, rko, orig_destq, at_head, 1 /*do lock*/);
                 rd_kafka_q_destroy(fwdq);
         }
