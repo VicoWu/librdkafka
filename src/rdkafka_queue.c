@@ -465,7 +465,7 @@ rd_kafka_op_t *rd_kafka_q_pop_serve(rd_kafka_q_t *rkq, // 用来存放response�
                                         break; /* Proper op, handle below. */
                                 }
                         }
-                        // 执行到这里，说明队列为空
+                        // 执行到这里，说明队列为空，或者队列头部的元素是合法的，并且已经通过方法rd_kafka_op_handle()进行处理
                         // unlikely 是一个宏，用来提示编译器这条分支不常走，提高分支预测效率，没有逻辑含义
                         if (unlikely(rd_kafka_q_check_yield(rkq))) { // 如果yield标志位的确置位了
                                 if (is_locked)
