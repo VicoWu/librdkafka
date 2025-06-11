@@ -740,10 +740,11 @@ rd_kafka_op_req(rd_kafka_q_t *destq, // 一般是某个模块的操作处理队�
 
 /**
  * Send simple type-only request to queue, wait for response.
+ * 取消订阅的时候(rd_kafka_resp_err_t rd_kafka_unsubscribe)会调用
  */
 rd_kafka_op_t *rd_kafka_op_req2(rd_kafka_q_t *destq, rd_kafka_op_type_t type) {
         rd_kafka_op_t *rko;
-
+        // 创建一个类型为type的rko，取消订阅的时候只有一个type RD_KAFKA_OP_SUBSCRIBE,没有任何的topic信息，因此这时候的时机作用其实是unsubscribe
         rko = rd_kafka_op_new(type);
         return rd_kafka_op_req(destq, rko, RD_POLL_INFINITE);
 }

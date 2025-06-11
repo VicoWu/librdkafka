@@ -36,6 +36,16 @@
 #include "rdkafka_int.h"
 
 
+/**
+ * RD_KAFKA_OP_SUBSCRIBE 这个请求 不是发送给 Broker 的，而是 发送到本地内部线程的本地队列 (rkcg_ops) 上去处理的。
+ * 它本质上是 告诉 librdkafka 自己内部：“我要 unsubscribe，请本地自己做必要的状态清理动作。”  并不是发 Kafka 网络协议到 Broker！
+ *
+ * 注意： unsubscribe() 本质是本地操作（取消订阅，清理状态)
+ * 真正的 LeaveGroup 请求是异步发给 Broker 的，而且后续 rebalance 是 Broker 主导，不是你主动控制。
+ * librdkafka 设计成了：应用线程 -> 提交请求到本地队列 -> 后台线程处理 -> 需要时再发网络请求。
+ * @param rk
+ * @return
+ */
 rd_kafka_resp_err_t rd_kafka_unsubscribe(rd_kafka_t *rk) {
         rd_kafka_cgrp_t *rkcg;
 

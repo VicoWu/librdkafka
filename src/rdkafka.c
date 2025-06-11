@@ -3430,6 +3430,12 @@ rd_kafka_error_t *rd_kafka_consumer_close_queue(rd_kafka_t *rk,
         return rd_kafka_consumer_close_q(rk, rkqu->rkqu_q);
 }
 
+/**
+ * close的时候发出的是 RD_KAFKA_OP_TERMINATE
+ * unsubsribe的时候，发出的是 RD_KAFKA_OP_SUBSCRIBE
+ * @param rk
+ * @return
+ */
 rd_kafka_resp_err_t rd_kafka_consumer_close(rd_kafka_t *rk) {
         rd_kafka_error_t *error;
         rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR__TIMED_OUT;
